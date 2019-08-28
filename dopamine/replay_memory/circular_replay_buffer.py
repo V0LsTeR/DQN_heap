@@ -56,24 +56,24 @@ CHECKPOINT_DURATION = 4
 def invalid_range(cursor, replay_capacity, stack_size, update_horizon):
     """Returns a array with the indices of cursor-related invalid transitions.
 
-  There are update_horizon + stack_size invalid indices:
-    - The update_horizon indices before the cursor, because we do not have a
-      valid N-step transition (including the next state).
-    - The stack_size indices on or immediately after the cursor.
-  If N = update_horizon, K = stack_size, and the cursor is at c, invalid
-  indices are:
-    c - N, c - N + 1, ..., c, c + 1, ..., c + K - 1.
+    There are update_horizon + stack_size invalid indices:
+      - The update_horizon indices before the cursor, because we do not have a
+        valid N-step transition (including the next state).
+      - The stack_size indices on or immediately after the cursor.
+    If N = update_horizon, K = stack_size, and the cursor is at c, invalid
+    indices are:
+      c - N, c - N + 1, ..., c, c + 1, ..., c + K - 1.
 
-  It handles special cases in a circular buffer in the beginning and the end.
+    It handles special cases in a circular buffer in the beginning and the end.
 
-  Args:
-    cursor: int, the position of the cursor.
-    replay_capacity: int, the size of the replay memory.
-    stack_size: int, the size of the stacks returned by the replay memory.
-    update_horizon: int, the agent's update horizon.
-  Returns:
-    np.array of size stack_size with the invalid indices.
-  """
+    Args:
+      cursor: int, the position of the cursor.
+      replay_capacity: int, the size of the replay memory.
+      stack_size: int, the size of the stacks returned by the replay memory.
+      update_horizon: int, the agent's update horizon.
+    Returns:
+      np.array of size stack_size with the invalid indices.
+    """
     assert cursor < replay_capacity
     return np.array(
         [(cursor - update_horizon + i) % replay_capacity
@@ -83,20 +83,20 @@ def invalid_range(cursor, replay_capacity, stack_size, update_horizon):
 class OutOfGraphReplayBuffer(object):
     """A simple out-of-graph Replay Buffer.
 
-  Stores transitions, state, action, reward, next_state, terminal (and any
-  extra contents specified) in a circular buffer and provides a uniform
-  transition sampling function.
+    Stores transitions, state, action, reward, next_state, terminal (and any
+    extra contents specified) in a circular buffer and provides a uniform
+    transition sampling function.
 
-  When the states consist of stacks of observations storing the states is
-  inefficient. This class writes observations and constructs the stacked states
-  at sample time.
+    When the states consist of stacks of observations storing the states is
+    inefficient. This class writes observations and constructs the stacked states
+    at sample time.
 
-  Attributes:
-    add_count: int, counter of how many transitions have been added (including
-      the blank ones at the beginning of an episode).
-    invalid_range: np.array, an array with the indices of cursor-related invalid
-      transitions
-  """
+    Attributes:
+      add_count: int, counter of how many transitions have been added (including
+        the blank ones at the beginning of an episode).
+      invalid_range: np.array, an array with the indices of cursor-related invalid
+        transitions
+    """
 
     def __init__(self,
                  observation_shape,
@@ -115,30 +115,30 @@ class OutOfGraphReplayBuffer(object):
                  reward_dtype=np.float32):
         """Initializes OutOfGraphReplayBuffer.
 
-    Args:
-      observation_shape: tuple of ints.
-      stack_size: int, number of frames to use in state stack.
-      replay_capacity: int, number of transitions to keep in memory.
-      batch_size: int.
-      update_horizon: int, length of update ('n' in n-step update).
-      gamma: int, the discount factor.
-      max_sample_attempts: int, the maximum number of attempts allowed to
-        get a sample.
-      extra_storage_types: list of ReplayElements defining the type of the extra
-        contents that will be stored and returned by sample_transition_batch.
-      observation_dtype: np.dtype, type of the observations. Defaults to
-        np.uint8 for Atari 2600.
-      action_shape: tuple of ints, the shape for the action vector. Empty tuple
-        means the action is a scalar.
-      action_dtype: np.dtype, type of elements in the action.
-      reward_shape: tuple of ints, the shape of the reward vector. Empty tuple
-        means the reward is a scalar.
-      reward_dtype: np.dtype, type of elements in the reward.
+        Args:
+          observation_shape: tuple of ints.
+          stack_size: int, number of frames to use in state stack.
+          replay_capacity: int, number of transitions to keep in memory.
+          batch_size: int.
+          update_horizon: int, length of update ('n' in n-step update).
+          gamma: int, the discount factor.
+          max_sample_attempts: int, the maximum number of attempts allowed to
+            get a sample.
+          extra_storage_types: list of ReplayElements defining the type of the extra
+            contents that will be stored and returned by sample_transition_batch.
+          observation_dtype: np.dtype, type of the observations. Defaults to
+            np.uint8 for Atari 2600.
+          action_shape: tuple of ints, the shape for the action vector. Empty tuple
+            means the action is a scalar.
+          action_dtype: np.dtype, type of elements in the action.
+          reward_shape: tuple of ints, the shape of the reward vector. Empty tuple
+            means the reward is a scalar.
+          reward_dtype: np.dtype, type of elements in the reward.
 
-    Raises:
-      ValueError: If replay_capacity is too small to hold at least one
-        transition.
-    """
+        Raises:
+          ValueError: If replay_capacity is too small to hold at least one
+            transition.
+        """
         assert isinstance(observation_shape, tuple)
         if replay_capacity < update_horizon + stack_size:
             raise ValueError('There is not enough capacity to cover '
@@ -182,8 +182,10 @@ class OutOfGraphReplayBuffer(object):
             [math.pow(self._gamma, n) for n in range(update_horizon)],
             dtype=np.float32)
 
+        # self._feature_matrix = np.eye([512, 512, num_actions])
+        # self._feature_matrix_inv = np.eye([512, 512, num_actions])
         self._feature_matrix = np.zeros((512, 512, num_actions))
-        self._feature_matrix_inv = np.zeros((512, 512, num_actions))  # or lambda * np.eye(512, 512, num_actions)
+        self._feature_matrix_inv = np.zeros((512, 512, num_actions))
         self._score_heap = []
         self._prev_cursor = 0
 
@@ -194,7 +196,7 @@ class OutOfGraphReplayBuffer(object):
 
     def _create_storage(self):
         """Creates the numpy arrays used to store transitions.
-    """
+        """
         self._store = {}
         for storage_element in self.get_storage_signature():
             array_shape = [self._replay_capacity] + list(storage_element.shape)
@@ -208,22 +210,22 @@ class OutOfGraphReplayBuffer(object):
     def get_add_args_signature(self):
         """The signature of the add function.
 
-    Note - Derived classes may return a different signature.
+        Note - Derived classes may return a different signature.
 
-    Returns:
-      list of ReplayElements defining the type of the argument signature needed
-        by the add function.
-    """
+        Returns:
+          list of ReplayElements defining the type of the argument signature needed
+            by the add function.
+        """
         return self.get_storage_signature()
 
     def get_storage_signature(self):
         """Returns a default list of elements to be stored in this replay memory.
 
-    Note - Derived classes may return a different signature.
+        Note - Derived classes may return a different signature.
 
-    Returns:
-      list of ReplayElements defining the type of the contents stored.
-    """
+        Returns:
+          list of ReplayElements defining the type of the contents stored.
+        """
         storage_elements = [
             ReplayElement('observation', self._observation_shape, self._observation_dtype),
             ReplayElement('action', self._action_shape, self._action_dtype),
@@ -237,7 +239,7 @@ class OutOfGraphReplayBuffer(object):
 
     def _add_zero_transition(self):
         """Adds a padding transition filled with zeros (Used in episode beginnings).
-    """
+        """
         zero_transition = []
         for element_type in self.get_add_args_signature():
             zero_transition.append(
@@ -247,23 +249,23 @@ class OutOfGraphReplayBuffer(object):
     def add(self, observation, action, reward, terminal, *args):
         """Adds a transition to the replay memory.
 
-    This function checks the types and handles the padding at the beginning of
-    an episode. Then it calls the _add function.
+        This function checks the types and handles the padding at the beginning of
+        an episode. Then it calls the _add function.
 
-    Since the next_observation in the transition will be the observation added
-    next there is no need to pass it.
+        Since the next_observation in the transition will be the observation added
+        next there is no need to pass it.
 
-    If the replay memory is at capacity the oldest transition will be discarded.
+        If the replay memory is at capacity the oldest transition will be discarded.
 
-    Args:
-      observation: np.array with shape observation_shape.
-      action: int, the action in the transition.
-      reward: float, the reward received in the transition.
-      terminal: A uint8 acting as a boolean indicating whether the transition
-                was terminal (1) or not (0).
-      *args: extra contents with shapes and dtypes according to
-        extra_storage_types.
-    """
+        Args:
+          observation: np.array with shape observation_shape.
+          action: int, the action in the transition.
+          reward: float, the reward received in the transition.
+          terminal: A uint8 acting as a boolean indicating whether the transition
+                    was terminal (1) or not (0).
+          *args: extra contents with shapes and dtypes according to
+            extra_storage_types.
+        """
         self._check_add_types(observation, action, reward, terminal, *args)
         if self.is_empty() or self._store['terminal'][self.cursor() - 1] == 1:
             for _ in range(self._stack_size - 1):
@@ -275,24 +277,27 @@ class OutOfGraphReplayBuffer(object):
     def _add(self, *args):
         """Internal add method to add to the storage arrays.
 
-    Args:
-      *args: All the elements in a transition.
+        Args:
+          *args: All the elements in a transition.
 
 
-    if self.debug_mode:
-        if self.dummy_cnt >= 1000:
-            # print(self._store['features'][999])
-            # print(np.shape(self._store['features'][999]))
-            # print(self._store['extra_state'][999])
-            # print(np.shape(self._store['extra_state'][999]))
-            # print(np.sum(self._store['extra_state'][999].flatten() > 0))
-            print('number of actions (buffer)')
-            print(self._num_actions)
-            raise ValueError('reached 1000 iterations successfully')
-        else:
-            self.dummy_cnt += 1
-    """
+        if self.debug_mode:
+            if self.dummy_cnt >= 1000:
+                # print(self._store['features'][999])
+                # print(np.shape(self._store['features'][999]))
+                # print(self._store['extra_state'][999])
+                # print(np.shape(self._store['extra_state'][999]))
+                # print(np.sum(self._store['extra_state'][999].flatten() > 0))
+                print('number of actions (buffer)')
+                print(self._num_actions)
+                raise ValueError('reached 1000 iterations successfully')
+            else:
+                self.dummy_cnt += 1
+        """
 
+        cursor = self.cursor()
+        assert self._replay_capacity == 500000, "replay capacity is not 500000"
+        '''
         arg_names = [e.name for e in self.get_add_args_signature()]
         for arg_name, arg in zip(arg_names, args):
             if arg_name == 'features':
@@ -300,64 +305,58 @@ class OutOfGraphReplayBuffer(object):
             if arg_name == 'action':
                 action = arg
 
-        cursor = self.cursor()
-
         if self.is_full():
             # Extract min from heap here, you will get the index corresponding to the entry with the lowest score.
             # Take the features of that entry and put them in low_features below.
             _, index = heappop(self._score_heap)
             low_features = np.mat(self._store['features'][index])
-            self._feature_matrix[:, :, action] = self._feature_matrix[:, :, action] - (low_features *
-                                                                                       np.transpose(low_features))
-            self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] - (
-                    self._feature_matrix_inv[:, :, action] * low_features * np.transpose(low_features) *
-                    self._feature_matrix_inv[:, :, action]) / (1 - np.transpose(low_features) *
-                                                               self._feature_matrix_inv[:, :, action] * low_features)
+            v_a_old_mult = np.dot(np.transpose(low_features), self._feature_matrix_inv[:, :, action])
+            self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] + np.dot((
+                np.dot(self._feature_matrix_inv[:, :, action], low_features), v_a_old_mult)) / (
+                                                                 1 - np.dot(v_a_old_mult, low_features))
 
             cursor = index
-        '''    
-    print(np.shape(features))
-    print(np.shape(self._feature_matrix))
-    print(np.shape(self._feature_matrix_inv))
-    print(np.shape())
-'''
-        # current_time = time.time()
-        self._feature_matrix[:, :, action] = self._feature_matrix[:, :, action] + (features * np.transpose(features))
+
+        # print(np.shape(features))
+        # print(np.shape(self._feature_matrix))
+        # print(np.shape(self._feature_matrix_inv))
+        # print(np.shape())
+
+        current_time = time.time()
         # print(np.max(features)-np.min(features))
         # print(' rank = ' + str(np.linalg.matrix_rank(self._feature_matrix[:, :, action])))
         # How do we invert the matrix in the very first iteration? Is the pseudo-inverse term enough?
-        if self._feature_matrix_inv[:, :, action].all() == 0 and self.add_count >= 10:
-            self._feature_matrix_inv[:, :, action] = np.linalg.pinv(self._feature_matrix[:, :, action])
-        else:
-            self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] + (
-                    self._feature_matrix_inv[:, :, action] * features * np.transpose(features) *
-                    self._feature_matrix_inv[:, :, action]) / (1 + np.transpose(features) *
-                                                               self._feature_matrix_inv[:, :, action] * features)
+        v_a_new_mult = np.dot(np.transpose(features), self._feature_matrix_inv[:, :, action])
+        self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] - (
+                np.dot(np.dot(self._feature_matrix_inv[:, :, action], features), v_a_new_mult)) / (1 + np.dot(v_a_new_mult, features))
         # print(np.max(self._feature_matrix_inv) - np.min(self._feature_matrix_inv))
 
-        score = np.transpose(features) * self._feature_matrix_inv[:, :, action] * features
-        '''
-    self._feature_matrix[:, :, action] = self._feature_matrix[:, :, action] + np.dot(features, np.transpose(features))
-    # How do we invert the matrix in the very first iteration? Is the pseudo-inverse term enough?
-    self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] + (
-            np.linalg.multi_dot([self._feature_matrix_inv[:, :, action], features, np.transpose(features),
-            self._feature_matrix_inv[:, :, action]])) / (1 + np.linalg.multi_dot([np.transpose(features),
-                                                       self._feature_matrix_inv[:, :, action], features]))
+        score = np.dot(v_a_new_mult, features)
 
-    score = np.linalg.multi_dot([np.transpose(features), self._feature_matrix_inv[:, :, action], features])
+        # self._feature_matrix[:, :, action] = self._feature_matrix[:, :, action] + np.dot(features, np.transpose(features))
+        # How do we invert the matrix in the very first iteration? Is the pseudo-inverse term enough?
+        # self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] + (
+        #        np.linalg.multi_dot([self._feature_matrix_inv[:, :, action], features, np.transpose(features),
+        #        self._feature_matrix_inv[:, :, action]])) / (1 + np.linalg.multi_dot([np.transpose(features),
+        #                                                   self._feature_matrix_inv[:, :, action], features]))
 
-    end_time = time.time()-current_time
-    self._avg_time = self._avg_time + (self._avg_time - end_time)/(self.add_count + 1)
-    if self.add_count % 100 == 0:
-        print("time elapsed is: " + str(end_time))
-'''
+        # score = np.linalg.multi_dot([np.transpose(features), self._feature_matrix_inv[:, :, action], features])
+
+        end_time = time.time()-current_time
+        self._avg_time = self._avg_time + (self._avg_time - end_time)/(self.add_count + 1)
+        if self.add_count % 100 == 0:
+            print("time elapsed is: " + str(end_time))
+
+        #end_time = time.time() - current_time
+        #if self.add_count % 100 == 0:
+            #print("time elapsed is: " + str(end_time))
         new_node = score, cursor
-        print(new_node)
+        #print(new_node)
         heappush(self._score_heap, new_node)
         # print(self._score_heap[0])
         buffer_heap_pt = new_node
         self._store['heap_ptr'][cursor] = buffer_heap_pt
-
+'''
         arg_names = [e.name for e in self.get_add_args_signature()]
         for arg_name, arg in zip(arg_names, args):
             if arg_name == 'extra_next_state':
@@ -381,12 +380,12 @@ class OutOfGraphReplayBuffer(object):
     def _check_add_types(self, *args):
         """Checks if args passed to the add method match those of the storage.
 
-    Args:
-      *args: Args whose types need to be validated.
+        Args:
+          *args: Args whose types need to be validated.
 
-    Raises:
-      ValueError: If args have wrong shape or dtype.
-    """
+        Raises:
+          ValueError: If args have wrong shape or dtype.
+        """
         if len(args) != len(self.get_add_args_signature()):
             raise ValueError('Add expects {} elements, received {}'.format(
                 len(self.get_add_args_signature()), len(args)))
@@ -419,16 +418,16 @@ class OutOfGraphReplayBuffer(object):
     def get_range(self, array, start_index, end_index):
         """Returns the range of array at the index handling wraparound if necessary.
 
-    Args:
-      array: np.array, the array to get the stack from.
-      start_index: int, index to the start of the range to be returned. Range
-        will wraparound if start_index is smaller than 0.
-      end_index: int, exclusive end index. Range will wraparound if end_index
-        exceeds replay_capacity.
+        Args:
+          array: np.array, the array to get the stack from.
+          start_index: int, index to the start of the range to be returned. Range
+            will wraparound if start_index is smaller than 0.
+          end_index: int, exclusive end index. Range will wraparound if end_index
+            exceeds replay_capacity.
 
-    Returns:
-      np.array, with shape [end_index - start_index, array.shape[1:]].
-    """
+        Returns:
+          np.array, with shape [end_index - start_index, array.shape[1:]].
+        """
         assert end_index > start_index, 'end_index must be larger than start_index'
         assert end_index >= 0
         assert start_index < self._replay_capacity
@@ -462,16 +461,16 @@ class OutOfGraphReplayBuffer(object):
     def is_valid_transition(self, index):
         """Checks if the index contains a valid transition.
 
-    Checks for collisions with the end of episodes and the current position
-    of the cursor.
+        Checks for collisions with the end of episodes and the current position
+        of the cursor.
 
-    Args:
-      index: int, the index to the state in the transition.
+        Args:
+          index: int, the index to the state in the transition.
 
-    Returns:
-      Is the index valid: Boolean.
+        Returns:
+          Is the index valid: Boolean.
 
-    """
+        """
         # Check the index is in the valid range
         if index < 0 or index >= self._replay_capacity:
             return False
@@ -497,17 +496,17 @@ class OutOfGraphReplayBuffer(object):
     def _create_batch_arrays(self, batch_size):
         """Create a tuple of arrays with the type of get_transition_elements.
 
-    When using the WrappedReplayBuffer with staging enabled it is important to
-    create new arrays every sample because StaginArea keeps a pointer to the
-    returned arrays.
+        When using the WrappedReplayBuffer with staging enabled it is important to
+        create new arrays every sample because StaginArea keeps a pointer to the
+        returned arrays.
 
-    Args:
-      batch_size: (int) number of transitions returned. If None the default
-        batch_size will be used.
+        Args:
+          batch_size: (int) number of transitions returned. If None the default
+            batch_size will be used.
 
-    Returns:
-      Tuple of np.arrays with the shape and type of get_transition_elements.
-    """
+        Returns:
+          Tuple of np.arrays with the shape and type of get_transition_elements.
+        """
         transition_elements = self.get_transition_elements(batch_size)
         batch_arrays = []
         for element in transition_elements:
@@ -517,16 +516,16 @@ class OutOfGraphReplayBuffer(object):
     def sample_index_batch(self, batch_size):
         """Returns a batch of valid indices sampled uniformly.
 
-    Args:
-      batch_size: int, number of indices returned.
+        Args:
+          batch_size: int, number of indices returned.
 
-    Returns:
-      list of ints, a batch of valid indices sampled uniformly.
+        Returns:
+          list of ints, a batch of valid indices sampled uniformly.
 
-    Raises:
-      RuntimeError: If the batch was not constructed after maximum number of
-        tries.
-    """
+        Raises:
+          RuntimeError: If the batch was not constructed after maximum number of
+            tries.
+        """
         if self.is_full():
             # add_count >= self._replay_capacity > self._stack_size
             min_id = self.cursor() - self._replay_capacity + self._stack_size - 1
@@ -560,32 +559,32 @@ class OutOfGraphReplayBuffer(object):
     def sample_transition_batch(self, batch_size=None, indices=None):
         """Returns a batch of transitions (including any extra contents).
 
-    If get_transition_elements has been overridden and defines elements not
-    stored in self._store, an empty array will be returned and it will be
-    left to the child class to fill it. For example, for the child class
-    OutOfGraphPrioritizedReplayBuffer, the contents of the
-    sampling_probabilities are stored separately in a sum tree.
+        If get_transition_elements has been overridden and defines elements not
+        stored in self._store, an empty array will be returned and it will be
+        left to the child class to fill it. For example, for the child class
+        OutOfGraphPrioritizedReplayBuffer, the contents of the
+        sampling_probabilities are stored separately in a sum tree.
 
-    When the transition is terminal next_state_batch has undefined contents.
+        When the transition is terminal next_state_batch has undefined contents.
 
-    NOTE: This transition contains the indices of the sampled elements. These
-    are only valid during the call to sample_transition_batch, i.e. they may
-    be used by subclasses of this replay buffer but may point to different data
-    as soon as sampling is done.
+        NOTE: This transition contains the indices of the sampled elements. These
+        are only valid during the call to sample_transition_batch, i.e. they may
+        be used by subclasses of this replay buffer but may point to different data
+        as soon as sampling is done.
 
-    Args:
-      batch_size: int, number of transitions returned. If None, the default
-        batch_size will be used.
-      indices: None or list of ints, the indices of every transition in the
-        batch. If None, sample the indices uniformly.
+        Args:
+          batch_size: int, number of transitions returned. If None, the default
+            batch_size will be used.
+          indices: None or list of ints, the indices of every transition in the
+            batch. If None, sample the indices uniformly.
 
-    Returns:
-      transition_batch: tuple of np.arrays with the shape and type as in
-        get_transition_elements().
+        Returns:
+          transition_batch: tuple of np.arrays with the shape and type as in
+            get_transition_elements().
 
-    Raises:
-      ValueError: If an element to be sampled is missing from the replay buffer.
-    """
+        Raises:
+          ValueError: If an element to be sampled is missing from the replay buffer.
+        """
         if batch_size is None:
             batch_size = self._batch_size
         if indices is None:
@@ -641,12 +640,12 @@ class OutOfGraphReplayBuffer(object):
     def get_transition_elements(self, batch_size=None):
         """Returns a 'type signature' for sample_transition_batch.
 
-    Args:
-      batch_size: int, number of transitions returned. If None, the default
-        batch_size will be used.
-    Returns:
-      signature: A namedtuple describing the method's return type signature.
-    """
+        Args:
+          batch_size: int, number of transitions returned. If None, the default
+            batch_size will be used.
+        Returns:
+          signature: A namedtuple describing the method's return type signature.
+        """
         batch_size = self._batch_size if batch_size is None else batch_size
 
         transition_elements = [
@@ -677,10 +676,10 @@ class OutOfGraphReplayBuffer(object):
     def _return_checkpointable_elements(self):
         """Return the dict of elements of the class for checkpointing.
 
-    Returns:
-      checkpointable_elements: dict containing all non private (starting with
-      _) members + all the arrays inside self._store.
-    """
+        Returns:
+          checkpointable_elements: dict containing all non private (starting with
+          _) members + all the arrays inside self._store.
+        """
         checkpointable_elements = {}
         for member_name, member in self.__dict__.items():
             if member_name == '_store':
@@ -693,14 +692,14 @@ class OutOfGraphReplayBuffer(object):
     def save(self, checkpoint_dir, iteration_number):
         """Save the OutOfGraphReplayBuffer attributes into a file.
 
-    This method will save all the replay buffer's state in a single file.
+        This method will save all the replay buffer's state in a single file.
 
-    Args:
-      checkpoint_dir: str, the directory where numpy checkpoint files should be
-        saved.
-      iteration_number: int, iteration_number to use as a suffix in naming
-        numpy checkpoint files.
-    """
+        Args:
+          checkpoint_dir: str, the directory where numpy checkpoint files should be
+            saved.
+          iteration_number: int, iteration_number to use as a suffix in naming
+            numpy checkpoint files.
+        """
         if not tf.gfile.Exists(checkpoint_dir):
             return
 
@@ -737,14 +736,14 @@ class OutOfGraphReplayBuffer(object):
     def load(self, checkpoint_dir, suffix):
         """Restores the object from bundle_dictionary and numpy checkpoints.
 
-    Args:
-      checkpoint_dir: str, the directory where to read the numpy checkpointed
-        files from.
-      suffix: str, the suffix to use in numpy checkpoint files.
+        Args:
+          checkpoint_dir: str, the directory where to read the numpy checkpointed
+            files from.
+          suffix: str, the suffix to use in numpy checkpoint files.
 
-    Raises:
-      NotFoundError: If not all expected files are found in directory.
-    """
+        Raises:
+          NotFoundError: If not all expected files are found in directory.
+        """
         save_elements = self._return_checkpointable_elements()
         # We will first make sure we have all the necessary files available to avoid
         # loading a partially-specified (i.e. corrupted) replay buffer.
@@ -773,14 +772,14 @@ class OutOfGraphReplayBuffer(object):
 class WrappedReplayBuffer(object):
     """Wrapper of OutOfGraphReplayBuffer with an in graph sampling mechanism.
 
-  Usage:
-    To add a transition:  call the add function.
+    Usage:
+      To add a transition:  call the add function.
 
-    To sample a batch:    Construct operations that depend on any of the
-                          tensors is the transition dictionary. Every sess.run
-                          that requires any of these tensors will sample a new
-                          transition.
-  """
+      To sample a batch:    Construct operations that depend on any of the
+                            tensors is the transition dictionary. Every sess.run
+                            that requires any of these tensors will sample a new
+                            transition.
+    """
 
     def __init__(self,
                  observation_shape,
@@ -801,34 +800,34 @@ class WrappedReplayBuffer(object):
                  reward_dtype=np.float32):
         """Initializes WrappedReplayBuffer.
 
-    Args:
-      observation_shape: tuple of ints.
-      stack_size: int, number of frames to use in state stack.
-      use_staging: bool, when True it would use a staging area to prefetch
-        the next sampling batch.
-      replay_capacity: int, number of transitions to keep in memory.
-      batch_size: int.
-      update_horizon: int, length of update ('n' in n-step update).
-      gamma: int, the discount factor.
-      wrapped_memory: The 'inner' memory data structure. If None,
-        it creates the standard DQN replay memory.
-      max_sample_attempts: int, the maximum number of attempts allowed to
-        get a sample.
-      extra_storage_types: list of ReplayElements defining the type of the extra
-        contents that will be stored and returned by sample_transition_batch.
-      observation_dtype: np.dtype, type of the observations. Defaults to
-        np.uint8 for Atari 2600.
-      action_shape: tuple of ints, the shape for the action vector. Empty tuple
-        means the action is a scalar.
-      action_dtype: np.dtype, type of elements in the action.
-      reward_shape: tuple of ints, the shape of the reward vector. Empty tuple
-        means the reward is a scalar.
-      reward_dtype: np.dtype, type of elements in the reward.
+        Args:
+          observation_shape: tuple of ints.
+          stack_size: int, number of frames to use in state stack.
+          use_staging: bool, when True it would use a staging area to prefetch
+            the next sampling batch.
+          replay_capacity: int, number of transitions to keep in memory.
+          batch_size: int.
+          update_horizon: int, length of update ('n' in n-step update).
+          gamma: int, the discount factor.
+          wrapped_memory: The 'inner' memory data structure. If None,
+            it creates the standard DQN replay memory.
+          max_sample_attempts: int, the maximum number of attempts allowed to
+            get a sample.
+          extra_storage_types: list of ReplayElements defining the type of the extra
+            contents that will be stored and returned by sample_transition_batch.
+          observation_dtype: np.dtype, type of the observations. Defaults to
+            np.uint8 for Atari 2600.
+          action_shape: tuple of ints, the shape for the action vector. Empty tuple
+            means the action is a scalar.
+          action_dtype: np.dtype, type of elements in the action.
+          reward_shape: tuple of ints, the shape of the reward vector. Empty tuple
+            means the reward is a scalar.
+          reward_dtype: np.dtype, type of elements in the reward.
 
-    Raises:
-      ValueError: If update_horizon is not positive.
-      ValueError: If discount factor is not in [0, 1].
-    """
+        Raises:
+          ValueError: If update_horizon is not positive.
+          ValueError: If discount factor is not in [0, 1].
+        """
         if replay_capacity < update_horizon + 1:
             raise ValueError(
                 'Update horizon ({}) should be significantly smaller '
@@ -865,31 +864,31 @@ class WrappedReplayBuffer(object):
     def add(self, observation, action, reward, terminal, *args):
         """Adds a transition to the replay memory.
 
-    Since the next_observation in the transition will be the observation added
-    next there is no need to pass it.
+        Since the next_observation in the transition will be the observation added
+        next there is no need to pass it.
 
-    If the replay memory is at capacity the oldest transition will be discarded.
+        If the replay memory is at capacity the oldest transition will be discarded.
 
-    Args:
-      observation: np.array with shape observation_shape.
-      action: int, the action in the transition.
-      reward: float, the reward received in the transition.
-      terminal: A uint8 acting as a boolean indicating whether the transition
-                was terminal (1) or not (0).
-      *args: extra contents with shapes and dtypes according to
-        extra_storage_types.
-    """
+        Args:
+          observation: np.array with shape observation_shape.
+          action: int, the action in the transition.
+          reward: float, the reward received in the transition.
+          terminal: A uint8 acting as a boolean indicating whether the transition
+                    was terminal (1) or not (0).
+          *args: extra contents with shapes and dtypes according to
+            extra_storage_types.
+        """
         self.memory.add(observation, action, reward, terminal, *args)
 
     def create_sampling_ops(self, use_staging):
         """Creates the ops necessary to sample from the replay buffer.
 
-    Creates the transition dictionary containing the sampling tensors.
+        Creates the transition dictionary containing the sampling tensors.
 
-    Args:
-      use_staging: bool, when True it would use a staging area to prefetch
-        the next sampling batch.
-    """
+        Args:
+          use_staging: bool, when True it would use a staging area to prefetch
+            the next sampling batch.
+        """
         with tf.name_scope('sample_replay'):
             with tf.device('/cpu:*'):
                 transition_type = self.memory.get_transition_elements()
@@ -908,28 +907,28 @@ class WrappedReplayBuffer(object):
     def _set_transition_shape(self, transition, transition_type):
         """Set shape for each element in the transition.
 
-    Args:
-      transition: tuple of tf.Tensors.
-      transition_type: tuple of ReplayElements descriving the shapes of the
-        respective tensors.
-    """
+        Args:
+          transition: tuple of tf.Tensors.
+          transition_type: tuple of ReplayElements describing the shapes of the
+            respective tensors.
+        """
         for element, element_type in zip(transition, transition_type):
             element.set_shape(element_type.shape)
 
     def _set_up_staging(self, transition):
         """Sets up staging ops for prefetching the next transition.
 
-    This allows us to hide the py_func latency. To do so we use a staging area
-    to pre-fetch the next batch of transitions.
+        This allows us to hide the py_func latency. To do so we use a staging area
+        to pre-fetch the next batch of transitions.
 
-    Args:
-      transition: tuple of tf.Tensors with shape
-        memory.get_transition_elements().
+        Args:
+          transition: tuple of tf.Tensors with shape
+            memory.get_transition_elements().
 
-    Returns:
-      prefetched_transition: tuple of tf.Tensors with shape
-        memory.get_transition_elements() that have been previously prefetched.
-    """
+        Returns:
+          prefetched_transition: tuple of tf.Tensors with shape
+            memory.get_transition_elements() that have been previously prefetched.
+        """
         transition_type = self.memory.get_transition_elements()
 
         # Create the staging area in CPU.
@@ -953,10 +952,10 @@ class WrappedReplayBuffer(object):
     def unpack_transition(self, transition_tensors, transition_type):
         """Unpacks the given transition into member variables.
 
-    Args:
-      transition_tensors: tuple of tf.Tensors.
-      transition_type: tuple of ReplayElements matching transition_tensors.
-    """
+        Args:
+          transition_tensors: tuple of tf.Tensors.
+          transition_type: tuple of ReplayElements matching transition_tensors.
+        """
         self.transition = collections.OrderedDict()
         for element, element_type in zip(transition_tensors, transition_type):
             self.transition[element_type.name] = element
@@ -975,20 +974,20 @@ class WrappedReplayBuffer(object):
     def save(self, checkpoint_dir, iteration_number):
         """Save the underlying replay buffer's contents in a file.
 
-    Args:
-      checkpoint_dir: str, the directory where to read the numpy checkpointed
-        files from.
-      iteration_number: int, the iteration_number to use as a suffix in naming
-        numpy checkpoint files.
-    """
+        Args:
+          checkpoint_dir: str, the directory where to read the numpy checkpointed
+            files from.
+          iteration_number: int, the iteration_number to use as a suffix in naming
+            numpy checkpoint files.
+        """
         self.memory.save(checkpoint_dir, iteration_number)
 
     def load(self, checkpoint_dir, suffix):
         """Loads the replay buffer's state from a saved file.
 
-    Args:
-      checkpoint_dir: str, the directory where to read the numpy checkpointed
-        files from.
-      suffix: str, the suffix to use in numpy checkpoint files.
-    """
+        Args:
+          checkpoint_dir: str, the directory where to read the numpy checkpointed
+            files from.
+          suffix: str, the suffix to use in numpy checkpoint files.
+        """
         self.memory.load(checkpoint_dir, suffix)
