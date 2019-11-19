@@ -25,6 +25,7 @@ from __future__ import division
 from __future__ import print_function
 
 from heapq import heappush, heappop
+import copy as copy
 
 import collections
 import gzip
@@ -51,6 +52,16 @@ STORE_FILENAME_PREFIX = '$store$_'
 
 # This constant determines how many iterations a checkpoint is kept for.
 CHECKPOINT_DURATION = 4
+
+
+class HeapElement:
+
+    def __init__(self, score, buffer_index):
+        self.score = score
+        self.buffer_index = buffer_index
+
+    def __lt__(self, other):
+        return self.score < other.score
 
 
 def invalid_range(cursor, replay_capacity, stack_size, update_horizon):
@@ -104,6 +115,7 @@ class OutOfGraphReplayBuffer(object):
                  replay_capacity,
                  batch_size,
                  num_actions,
+                 use_cyclic_buffer,
                  update_horizon=1,
                  gamma=0.99,
                  max_sample_attempts=1000,
@@ -155,6 +167,7 @@ class OutOfGraphReplayBuffer(object):
         tf.logging.info('\t update_horizon: %d', update_horizon)
         tf.logging.info('\t gamma: %f', gamma)
 
+        self._use_cyclic_buffer = use_cyclic_buffer
         self._num_actions = num_actions
         self._action_shape = action_shape
         self._action_dtype = action_dtype
@@ -182,10 +195,12 @@ class OutOfGraphReplayBuffer(object):
             [math.pow(self._gamma, n) for n in range(update_horizon)],
             dtype=np.float32)
 
-        # self._feature_matrix = np.eye([512, 512, num_actions])
-        # self._feature_matrix_inv = np.eye([512, 512, num_actions])
-        self._feature_matrix = np.zeros((512, 512, num_actions))
-        self._feature_matrix_inv = np.zeros((512, 512, num_actions))
+        # TODO(B): fix this crap below.
+        self._feature_matrix_inv = np.zeros((512, 512, self._num_actions))
+        for j in range(self._num_actions):
+            self._feature_matrix_inv[:, :, j] = np.identity(512)
+        assert (np.shape(self._feature_matrix_inv)) == (512, 512, self._num_actions)
+
         self._score_heap = []
         self._prev_cursor = 0
 
@@ -193,6 +208,13 @@ class OutOfGraphReplayBuffer(object):
         self.dummy_cnt = 0
         self.debug_mode = False
         self._avg_time = 0
+        self._samp_iter = 0
+        self._samp_iter_n = 0
+        self._correct_states = 0
+        self._wrong_states = 0
+        self._correct_next_states = 0
+        self._wrong_next_states = 0
+        self._score_cnt = 0
 
     def _create_storage(self):
         """Creates the numpy arrays used to store transitions.
@@ -202,10 +224,7 @@ class OutOfGraphReplayBuffer(object):
             array_shape = [self._replay_capacity] + list(storage_element.shape)
             self._store[storage_element.name] = np.empty(
                 array_shape, dtype=storage_element.type)
-        ptr_shape = [self._replay_capacity] + list((2,))
-        self._store['heap_ptr'] = np.empty(ptr_shape, dtype=np.float32)
-        # print(np.shape(self._store['action']))
-        # raise ValueError('Storage shape has been printed')
+        self._store['heap_ptr'] = [None] * self._replay_capacity
 
     def get_add_args_signature(self):
         """The signature of the add function.
@@ -266,6 +285,7 @@ class OutOfGraphReplayBuffer(object):
           *args: extra contents with shapes and dtypes according to
             extra_storage_types.
         """
+
         self._check_add_types(observation, action, reward, terminal, *args)
         if self.is_empty() or self._store['terminal'][self.cursor() - 1] == 1:
             for _ in range(self._stack_size - 1):
@@ -279,103 +299,97 @@ class OutOfGraphReplayBuffer(object):
 
         Args:
           *args: All the elements in a transition.
-
-
-        if self.debug_mode:
-            if self.dummy_cnt >= 1000:
-                # print(self._store['features'][999])
-                # print(np.shape(self._store['features'][999]))
-                # print(self._store['extra_state'][999])
-                # print(np.shape(self._store['extra_state'][999]))
-                # print(np.sum(self._store['extra_state'][999].flatten() > 0))
-                print('number of actions (buffer)')
-                print(self._num_actions)
-                raise ValueError('reached 1000 iterations successfully')
-            else:
-                self.dummy_cnt += 1
         """
 
         cursor = self.cursor()
-        assert self._replay_capacity == 500000, "replay capacity is not 500000"
-        '''
+
+        if not self._use_cyclic_buffer:
+            arg_names = [e.name for e in self.get_add_args_signature()]
+            for arg_name, arg in zip(arg_names, args):
+                if arg_name == 'features':
+                    features = np.mat(arg)
+                if arg_name == 'action':
+                    action = arg
+
+            if self.is_full():
+                index = heappop(self._score_heap).buffer_index
+                low_features = np.mat(self._store['features'][index])
+                score = self.compute_score(low_features, features, action)
+                cursor = index
+            else:
+                score = self.compute_score(features, features, action)
+
+            new_node = HeapElement(copy.deepcopy(score), cursor)
+            heappush(self._score_heap, new_node)
+            self._store['heap_ptr'][cursor] = new_node
+
         arg_names = [e.name for e in self.get_add_args_signature()]
         for arg_name, arg in zip(arg_names, args):
-            if arg_name == 'features':
-                features = np.mat(arg)
-            if arg_name == 'action':
-                action = arg
-
-        if self.is_full():
-            # Extract min from heap here, you will get the index corresponding to the entry with the lowest score.
-            # Take the features of that entry and put them in low_features below.
-            _, index = heappop(self._score_heap)
-            low_features = np.mat(self._store['features'][index])
-            v_a_old_mult = np.dot(np.transpose(low_features), self._feature_matrix_inv[:, :, action])
-            self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] + np.dot((
-                np.dot(self._feature_matrix_inv[:, :, action], low_features), v_a_old_mult)) / (
-                                                                 1 - np.dot(v_a_old_mult, low_features))
-
-            cursor = index
-
-        # print(np.shape(features))
-        # print(np.shape(self._feature_matrix))
-        # print(np.shape(self._feature_matrix_inv))
-        # print(np.shape())
-
-        current_time = time.time()
-        # print(np.max(features)-np.min(features))
-        # print(' rank = ' + str(np.linalg.matrix_rank(self._feature_matrix[:, :, action])))
-        # How do we invert the matrix in the very first iteration? Is the pseudo-inverse term enough?
-        v_a_new_mult = np.dot(np.transpose(features), self._feature_matrix_inv[:, :, action])
-        self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] - (
-                np.dot(np.dot(self._feature_matrix_inv[:, :, action], features), v_a_new_mult)) / (1 + np.dot(v_a_new_mult, features))
-        # print(np.max(self._feature_matrix_inv) - np.min(self._feature_matrix_inv))
-
-        score = np.dot(v_a_new_mult, features)
-
-        # self._feature_matrix[:, :, action] = self._feature_matrix[:, :, action] + np.dot(features, np.transpose(features))
-        # How do we invert the matrix in the very first iteration? Is the pseudo-inverse term enough?
-        # self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] + (
-        #        np.linalg.multi_dot([self._feature_matrix_inv[:, :, action], features, np.transpose(features),
-        #        self._feature_matrix_inv[:, :, action]])) / (1 + np.linalg.multi_dot([np.transpose(features),
-        #                                                   self._feature_matrix_inv[:, :, action], features]))
-
-        # score = np.linalg.multi_dot([np.transpose(features), self._feature_matrix_inv[:, :, action], features])
-
-        end_time = time.time()-current_time
-        self._avg_time = self._avg_time + (self._avg_time - end_time)/(self.add_count + 1)
-        if self.add_count % 100 == 0:
-            print("time elapsed is: " + str(end_time))
-
-        #end_time = time.time() - current_time
-        #if self.add_count % 100 == 0:
-            #print("time elapsed is: " + str(end_time))
-        new_node = score, cursor
-        #print(new_node)
-        heappush(self._score_heap, new_node)
-        # print(self._score_heap[0])
-        buffer_heap_pt = new_node
-        self._store['heap_ptr'][cursor] = buffer_heap_pt
-'''
-        arg_names = [e.name for e in self.get_add_args_signature()]
-        for arg_name, arg in zip(arg_names, args):
-            if arg_name == 'extra_next_state':
+            if arg_name in ('next_state', 'next_action', 'next_reward'):
                 continue
-            elif arg_name == 'extra_state':
-                self._store['extra_state'][cursor] = arg
+            elif arg_name in ('state', 'action', 'reward'):
+                self._store[arg_name][cursor] = arg
                 if self.add_count >= 1:
-                    self._store['extra_next_state'][self._prev_cursor] = arg
+                    self._store['next_' + arg_name][self._prev_cursor] = arg
             else:
                 self._store[arg_name][cursor] = arg
 
         self.add_count += 1
+
+        updated_cursor = (cursor + 1) % self._replay_capacity
         self.invalid_range = invalid_range(
-            self.cursor(), self._replay_capacity, self._stack_size,
+            updated_cursor, self._replay_capacity, self._stack_size,
             self._update_horizon)
-        if self.add_count >= 1:
-            assert self._store['extra_state'][cursor].all() == \
-                   self._store['extra_next_state'][self._prev_cursor].all(), "current state is not prev next_state"
+
         self._prev_cursor = cursor
+
+    def update_features(self, index, updated_features):
+        """ Replaces the old features of the sampled transitions with
+            the updated features, updates the score, and heapifies.
+
+            Args:
+                index: the index in the buffer of the transition whose
+                        features are to be replaced.
+                updated_features: the new updated features of said transition.
+        """
+        discarded_features = self._store['features'][index]
+        self._store['features'][index] = updated_features
+        action = self._store['action'][index]
+
+        updated_score = self.compute_score(discarded_features, updated_features, action)
+        self._store['heap_ptr'][index].score = updated_score
+
+    def compute_score(self, low_features, new_features, action):
+        """ Updates the matrix inv(A) using Sherman-Morrison's formula
+            by subtracting low_features (if the buffer is full) and adding
+            new_features, and computes the score corresponding to new_features.
+
+            Args:
+                low_features: Features corresponding to the lowest score,
+                                to be removed from the buffer and inv(A).
+                new_features: Features of the newly acquired transition to be
+                                stored in the buffer, or the newly updated
+                                features of a sampled transition.
+                action: the action of the transition corresponding to new_features.
+
+            Returns:
+                score: the score corresponding to new_features
+        """
+
+        if self.is_full():
+            vA_old = np.dot(np.transpose(low_features), self._feature_matrix_inv[:, :, action])
+            Av_old = np.dot(self._feature_matrix_inv[:, :, action], low_features)
+            self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] + (
+                    np.outer(Av_old, vA_old) / (1 - np.dot(vA_old, low_features)))
+
+        vA_new = np.dot(np.transpose(new_features), self._feature_matrix_inv[:, :, action])
+        Av_new = np.dot(self._feature_matrix_inv[:, :, action], new_features)
+        self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] - (
+                np.outer(Av_new, vA_new) / (1 + np.dot(vA_new, new_features)))
+
+        score = np.dot(vA_new, new_features)
+
+        return score
 
     def _check_add_types(self, *args):
         """Checks if args passed to the add method match those of the storage.
@@ -491,6 +505,9 @@ class OutOfGraphReplayBuffer(object):
         if self.get_terminal_stack(index)[:-1].any():
             return False
 
+        if not self._store['state'][index].any() or not self._store['next_state'][index].any():
+            return False
+
         return True
 
     def _create_batch_arrays(self, batch_size):
@@ -591,6 +608,8 @@ class OutOfGraphReplayBuffer(object):
             indices = self.sample_index_batch(batch_size)
         assert len(indices) == batch_size
 
+        self._samp_iter += 1  # TODO(B): remove this line
+
         transition_elements = self.get_transition_elements(batch_size)
         batch_arrays = self._create_batch_arrays(batch_size)
         for batch_element, state_index in enumerate(indices):
@@ -613,19 +632,10 @@ class OutOfGraphReplayBuffer(object):
             # Fill the contents of each array in the sampled batch.
             assert len(transition_elements) == len(batch_arrays)
             for element_array, element in zip(batch_arrays, transition_elements):
-                if element.name == 'state':
-                    element_array[batch_element] = self.get_observation_stack(state_index)
-                elif element.name == 'reward':
+                if element.name == 'reward':
                     # compute the discounted sum of rewards in the trajectory.
                     element_array[batch_element] = np.sum(
                         trajectory_discount_vector * trajectory_rewards, axis=0)
-                elif element.name == 'next_state':
-                    element_array[batch_element] = self.get_observation_stack(
-                        (next_state_index) % self._replay_capacity)
-                elif element.name in ('next_action', 'next_reward'):
-                    element_array[batch_element] = (
-                        self._store[element.name.lstrip('next_')][(next_state_index) %
-                                                                  self._replay_capacity])
                 elif element.name == 'terminal':
                     element_array[batch_element] = is_terminal_transition
                 elif element.name == 'indices':
@@ -633,8 +643,80 @@ class OutOfGraphReplayBuffer(object):
                 elif element.name in self._store.keys():
                     element_array[batch_element] = (
                         self._store[element.name][state_index])
-                # We assume the other elements are filled in by the subclass.
+                    # We assume the other elements are filled in by the subclass.
+                    '''
+                    for j in range(4, 20001):
+                        if (self._store['state'][j] == self.get_observation_stack(j)).all():
+                            self._correct_states += 1
+                        else:
+                            self._wrong_states += 1
+                            with open('Wrong_states.txt', 'a') as the_file:
+                                the_file.write('our state is: ' + str(self._store['state'][j]) + '\n')
+                                the_file.write('real state is: ' + str(self.get_observation_stack(j)) + '\n')
+                        if (self._store['next_state'][j] ==
+                                self.get_observation_stack((j+1) % self._replay_capacity)).all():
+                            self._correct_next_states += 1
+                        else:
+                            self._wrong_next_states += 1
+                            with open('Wrong_next_states.txt', 'a') as the_file:
+                                the_file.write('our next_state is: ' + str(self._store['state'][j]) + '\n')
+                                the_file.write('real next_state is: ' + str(self.get_observation_stack(j)) + '\n')
+                    print('Correct_states = ' + str(self._correct_states))
+                    print('Wrong_states = ' + str(self._wrong_states))
+                    print('Correct_next_states = ' + str(self._correct_next_states))
+                    print('Wrong_next_states = ' + str(self._wrong_next_states))
+                    assert False
+                    '''
+                    '''
+                    if element.name == 'state':
+                        print(str(self._samp_iter) + ", state_index = " + str(state_index))
+                        self._samp_iter += 1
+                        assert (np.shape(self._store['state'][state_index]) ==
+                                np.shape(self.get_observation_stack(state_index))), "Wrong state shape"
+                        assert (self._store['state'][state_index] == self.get_observation_stack(state_index)).all(), \
+                            "Faulty state"
+                    if element.name == 'next_state':
+                        print(str(self._samp_iter_n) + ", next_state_index = " + str(next_state_index))
+                        self._samp_iter_n += 1
+                        assert (np.shape(self._store['next_state'][state_index]) ==
+                                np.shape(self.get_observation_stack(next_state_index % self._replay_capacity))),\
+                            "Wrong next_state shape"
+                        assert (self._store['next_state'][state_index] ==
+                                self.get_observation_stack(next_state_index % self._replay_capacity)).all(), \
+                            "Faulty next_state"
+                    '''
 
+                    if element.name == 'state':
+                        if not (self._store['state'][state_index] == self.get_observation_stack(state_index)).all():
+                            self._wrong_states += 1
+                            with open('Wrong_states.txt', 'a') as the_file:
+                                the_file.write(' our state is: ' + str(self._store['state'][state_index]) + '\n')
+                                # the_file.write('real state is: ' + str(self.get_observation_stack(state_index)) + '\n')
+                            with open('wrong_state_indices.txt', 'a') as the_file:
+                                the_file.write(str(state_index) + '\n')
+                    if element.name == 'next_state':
+                        if not (self._store['next_state'][state_index] ==
+                                self.get_observation_stack(next_state_index % self._replay_capacity)).all():
+                            self._wrong_next_states += 1
+                            with open('Wrong_next_states.txt', 'a') as the_file:
+                                the_file.write('our next_state is: ' +
+                                               str(self._store['next_state'][state_index]) + '\n')
+                                # the_file.write('real next_state is: ' +
+                                #               str(self.get_observation_stack(next_state_index)) + '\n')
+                            with open('wrong_next_state_indices.txt', 'a') as the_file:
+                                the_file.write(str(state_index) + '\n')
+                    '''
+                    if self.add_count >= 25000:
+                        for j in range(self.add_count):
+                            if (self._store['next_state'][j] == np.zeros(self._state_shape)).all():
+                                with open('zero_next_states_indices.txt', 'a') as the_file:
+                                    the_file.write(str(j) + '\n')
+                        print('\n' + 'Wrong_states = ' + str(self._wrong_states))
+                        print('Wrong_next_states = ' + str(self._wrong_next_states))
+                        print('Sampling Iterations = ' + str(self._samp_iter))
+                        assert False
+                    '''
+        # assert np.shape()
         return batch_arrays
 
     def get_transition_elements(self, batch_size=None):
@@ -647,19 +729,10 @@ class OutOfGraphReplayBuffer(object):
           signature: A namedtuple describing the method's return type signature.
         """
         batch_size = self._batch_size if batch_size is None else batch_size
-
         transition_elements = [
-            ReplayElement('state', (batch_size,) + self._state_shape,
-                          self._observation_dtype),
             ReplayElement('action', (batch_size,) + self._action_shape,
                           self._action_dtype),
             ReplayElement('reward', (batch_size,) + self._reward_shape,
-                          self._reward_dtype),
-            ReplayElement('next_state', (batch_size,) + self._state_shape,
-                          self._observation_dtype),
-            ReplayElement('next_action', (batch_size,) + self._action_shape,
-                          self._action_dtype),
-            ReplayElement('next_reward', (batch_size,) + self._reward_shape,
                           self._reward_dtype),
             ReplayElement('terminal', (batch_size,), np.uint8),
             ReplayElement('indices', (batch_size,), np.int32)
@@ -785,6 +858,7 @@ class WrappedReplayBuffer(object):
                  observation_shape,
                  stack_size,
                  num_actions,
+                 use_cyclic_buffer,
                  use_staging=True,
                  replay_capacity=1000000,
                  batch_size=32,
@@ -798,6 +872,7 @@ class WrappedReplayBuffer(object):
                  action_dtype=np.int32,
                  reward_shape=(),
                  reward_dtype=np.float32):
+
         """Initializes WrappedReplayBuffer.
 
         Args:
@@ -849,6 +924,7 @@ class WrappedReplayBuffer(object):
                 replay_capacity,
                 batch_size,
                 num_actions,
+                use_cyclic_buffer,
                 update_horizon,
                 gamma,
                 max_sample_attempts,
@@ -961,7 +1037,7 @@ class WrappedReplayBuffer(object):
             self.transition[element_type.name] = element
 
         # TODO(bellemare): These are legacy and should probably be removed in
-        # future versions.
+        #  future versions.
         self.states = self.transition['state']
         self.actions = self.transition['action']
         self.rewards = self.transition['reward']

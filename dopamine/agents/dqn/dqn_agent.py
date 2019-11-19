@@ -100,7 +100,8 @@ class DQNAgent(object):
                      centered=True),
                  summary_writer=None,
                  summary_writing_frequency=500,
-                 allow_partial_reload=False):
+                 allow_partial_reload=False,
+                 use_cyclic_buffer=False):
         """Initializes the agent and constructs the components of its graph.
 
         Args:
@@ -179,20 +180,23 @@ class DQNAgent(object):
         self.summary_writer = summary_writer
         self.summary_writing_frequency = summary_writing_frequency
         self.allow_partial_reload = allow_partial_reload
-        self.dumb_cnt = 0
+        self.use_cyclic_buffer = use_cyclic_buffer
 
         with tf.device(tf_device):
             # Create a placeholder for the state input to the DQN network.
             # The last axis indicates the number of consecutive frames stacked.
             self.state_shape = (1,) + self.observation_shape + (stack_size,)
+            self.buffer_state_shape = self.observation_shape + (stack_size,)
             self.state = np.zeros(self.state_shape)
+            self._state = np.zeros(self.buffer_state_shape)
             self.state_ph = tf.placeholder(self.observation_dtype, self.state_shape,
                                            name='state_ph')
             self._features_shape = (512, 1)
             self._features = np.zeros(self._features_shape)
-            self._next_state = np.zeros(self.state_shape)
-            self._replay = self._build_replay_buffer(use_staging)
-            # TODO(B): Make sure the buffer includes next_observation (perhaps unnecessary)
+            self._next_state = np.ones(self.buffer_state_shape)
+            self._next_action = 0
+            self._next_reward = 0
+            self._replay = self._build_replay_buffer(use_staging, self.use_cyclic_buffer)
             self._build_networks()
 
             self._train_op = self._build_train_op()
@@ -208,8 +212,17 @@ class DQNAgent(object):
         # environment.
         self._observation = None
         self._last_observation = None
+
         self._next_observation = None
+        self.dumb_cnt = 0
         self._state_count = 0
+        self._state_dumb = np.zeros(self.buffer_state_shape)
+        self._state_dummy = np.zeros(self.buffer_state_shape)
+        self._correct_agent_states = 0
+        self._wrong_agent_states = 0
+        self._correct_agent_next_states = 0
+        self._wrong_agent_next_states = 0
+        self._state_build_cnt = 3
 
     def _get_network_type(self):
         """Returns the type of the outputs of a Q value network.
@@ -249,18 +262,16 @@ class DQNAgent(object):
         self.target_convnet = tf.make_template('Target', self._network_template)
         self._net_outputs = self.online_convnet(self.state_ph)
         # TODO(bellemare): Ties should be broken. They are unlikely to happen when
-        # using a deep network, but may affect performance with a linear
-        # approximation scheme.
+        #  using a deep network, but may affect performance with a linear
+        #  approximation scheme.
         self._q_argmax = tf.argmax(self._net_outputs.q_values, axis=1)[0]
         self._features_tensor = self._net_outputs.features
 
         self._replay_net_outputs = self.online_convnet(self._replay.states)
         self._replay_next_target_net_outputs = self.target_convnet(
             self._replay.next_states)
-        # TODO(B): In the two lines above, should we add ".q_values"? as in:
-        #  ... = self.online_convnet(self._replay.states).q_values
 
-    def _build_replay_buffer(self, use_staging):
+    def _build_replay_buffer(self, use_staging, use_cyclic_buffer):
         """Creates the replay buffer used by the agent.
 
         Args:
@@ -274,15 +285,18 @@ class DQNAgent(object):
             observation_shape=self.observation_shape,
             stack_size=self.stack_size,
             num_actions=self.num_actions,
+            use_cyclic_buffer=use_cyclic_buffer,
             use_staging=use_staging,
             update_horizon=self.update_horizon,
             gamma=self.gamma,
             observation_dtype=self.observation_dtype.as_numpy_dtype,
             extra_storage_types=[circular_replay_buffer.ReplayElement('features', self._features_shape, np.float32),
-                                 circular_replay_buffer.ReplayElement('extra_state', self.state_shape,
+                                 circular_replay_buffer.ReplayElement('state', self.buffer_state_shape,
                                                                       self.observation_dtype.as_numpy_dtype),
-                                 circular_replay_buffer.ReplayElement('extra_next_state', self.state_shape,
-                                                                      self.observation_dtype.as_numpy_dtype)])
+                                 circular_replay_buffer.ReplayElement('next_state', self.buffer_state_shape,
+                                                                      self.observation_dtype.as_numpy_dtype),
+                                 circular_replay_buffer.ReplayElement('next_action', (), np.int32),
+                                 circular_replay_buffer.ReplayElement('next_reward', (), np.float32)])
 
     def _build_target_q_op(self):
         """Build an op used as a target for the Q-value.
@@ -372,38 +386,16 @@ class DQNAgent(object):
         Returns:
           int, the selected action.
         """
+        self._state = self.state[0, :, :, :]
+        self._features = np.transpose(np.array(self._sess.run(self._features_tensor, {self.state_ph: self.state})))
 
-        '''
-        if self.dumb_cnt > 100:
-            print('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz')
-            print(self._features.shape)
-            #lel = tf.Session().run(self._features)
-            print(self._features)
-            #lel = self._sess.run(self._features, {self.state_ph: self.state})
-            #print(lel)
-            #print(np.matmul(self._features, self._features))
-            #tmp_sess = tf.compat.v1.Session()
-            #features = tmp_sess.run(self._features)
-            #print(features)
-            print('number of actions (agent)')
-            print(self.num_actions)
-            raise ValueError('reached 100 iterationsssss')
-        else:
-            self.dumb_cnt += 1
-        '''
-        # TODO(B): See comment in previous version. Ask if it should be done (when saving, should state include the most
-        #  recent obs or up until last_obs? Also check when it's built how state is constructed and what it includes
-        #  exactly). The answer is most likely positive (look at record_observation function).
+        self._last_observation = self._observation
+        self._record_observation(observation)
 
         if not self.eval_mode:
-            self._store_transition(self._last_observation, self.action, reward, False, self._features, self.state,
-                                   self._next_state)
-            self._last_observation = self._observation
-            self._record_observation(observation)
+            self._store_transition(self._last_observation, self.action, reward, False, self._features, self._state,
+                                   self._next_state, self._next_action, self._next_reward)
             self._train_step()
-        else:
-            self._last_observation = self._observation
-            self._record_observation(observation)
 
         self.action = self._select_action()
         return self.action
@@ -417,9 +409,11 @@ class DQNAgent(object):
         Args:
           reward: float, the last reward from the environment.
         """
+        self._state = self.state[0, :, :, :]
+        self._features = np.transpose(np.array(self._sess.run(self._features_tensor, {self.state_ph: self.state})))
         if not self.eval_mode:
-            self._store_transition(self._observation, self.action, reward, True, self._features, self.state,
-                                   self._next_state)
+            self._store_transition(self._observation, self.action, reward, True, self._features, self._state,
+                                   self._next_state, self._next_action, self._next_reward)
 
     def _select_action(self):
         """Select an action from the set of available actions.
@@ -460,6 +454,15 @@ class DQNAgent(object):
         if self._replay.memory.add_count > self.min_replay_history:
             if self.training_steps % self.update_period == 0:
                 self._sess.run(self._train_op)
+
+                replay_states = self._replay.states.eval(session=self._sess)
+                replay_indices = self._replay.indices.eval(session=self._sess)
+                self._replay_features = np.transpose(np.array(self._sess.run(self._replay_net_outputs.features,
+                                                                             {self._replay.states: replay_states})))
+
+                for j, index in zip(range(self._replay.batch_size), replay_indices):
+                    self._replay.memory.update_features(index, np.reshape(self._replay_features[:, j], (512, 1)))
+
                 if (self.summary_writer is not None and
                         self.training_steps > 0 and
                         self.training_steps % self.summary_writing_frequency == 0):
@@ -487,7 +490,8 @@ class DQNAgent(object):
         self.state = np.roll(self.state, -1, axis=-1)
         self.state[0, ..., -1] = self._observation
 
-    def _store_transition(self, last_observation, action, reward, is_terminal, features, state, next_state):
+    def _store_transition(self, last_observation, action, reward, is_terminal, features, state, next_state, next_action,
+                          next_reward):
         """Stores an experienced transition.
 
         Executes a tf session and executes replay buffer ops in order to store the
@@ -503,17 +507,10 @@ class DQNAgent(object):
           reward: float, the reward.
           is_terminal: bool, indicating if the current state is a terminal state.
         """
-        self._features = np.transpose(self._sess.run(self._features_tensor, {self.state_ph: self.state}))
-        if self._state_count >= 4:
-            self._replay.add(last_observation, action, reward, is_terminal, features, state, next_state)
-            #if self._state_count >= 100:
-            #    print(np.shape(self._features))
-            #    print(self._replay.memory._store['observation'][4])
-            #    raise ValueError('Printed storage')
-            #else:
-            #    self._state_count += 1
-        else:
-            self._state_count += 1
+
+        self._replay.add(last_observation, action, reward, is_terminal, features, state, next_state, next_action,
+                         next_reward)
+
 
     def _reset_state(self):
         """Resets the agent state by filling it with zeros."""
