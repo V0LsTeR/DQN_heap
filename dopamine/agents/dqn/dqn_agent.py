@@ -200,6 +200,8 @@ class DQNAgent(object):
             self._build_networks()
 
             self._train_op = self._build_train_op()
+            # print(self._train_op[1])
+            # assert False
             self._sync_qt_ops = self._build_sync_op()
 
         if self.summary_writer is not None:
@@ -270,6 +272,8 @@ class DQNAgent(object):
         self._replay_net_outputs = self.online_convnet(self._replay.states)
         self._replay_next_target_net_outputs = self.target_convnet(
             self._replay.next_states)
+        # TODO(B): In the two lines above, should we add ".q_values"? as in:
+        #  ... = self.online_convnet(self._replay.states).q_values (and do something similar to extract the features?)
 
     def _build_replay_buffer(self, use_staging, use_cyclic_buffer):
         """Creates the replay buffer used by the agent.
@@ -336,6 +340,7 @@ class DQNAgent(object):
         if self.summary_writer is not None:
             with tf.variable_scope('Losses'):
                 tf.summary.scalar('HuberLoss', tf.reduce_mean(loss))
+        # return [self.optimizer.minimize(tf.reduce_mean(loss)), self._replay_net_outputs.features]
         return self.optimizer.minimize(tf.reduce_mean(loss))
 
     def _build_sync_op(self):
@@ -386,6 +391,42 @@ class DQNAgent(object):
         Returns:
           int, the selected action.
         """
+
+        '''
+        if self.dumb_cnt > 100:
+            print('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz')
+            print(self._features.shape)
+            #lel = tf.Session().run(self._features)
+            print(self._features)
+            #lel = self._sess.run(self._features, {self.state_ph: self.state})
+            #print(lel)
+            #print(np.matmul(self._features, self._features))
+            #tmp_sess = tf.compat.v1.Session()
+            #features = tmp_sess.run(self._features)
+            #print(features)
+            print('number of actions (agent)')
+            print(self.num_actions)
+            raise ValueError('reached 100 iterationsssss')
+        else:
+            self.dumb_cnt += 1
+        '''
+        # TODO(B): See comment in previous version. Ask if it should be done (when saving, should state include the most
+        #  recent obs or up until last_obs? Also check when it's built how state is constructed and what it includes
+        #  exactly). The answer is most likely positive (look at record_observation function).
+        '''
+        if not self.eval_mode:
+            self._store_transition(self._last_observation, self.action, reward, False, self._features, self.state,
+                                   self._next_state)
+            self._last_observation = self._observation
+            self._record_observation(observation)
+            self._train_step()
+        else:
+            self._last_observation = self._observation
+            self._record_observation(observation)
+
+        self.action = self._select_action()
+        return self.action
+        '''
         self._state = self.state[0, :, :, :]
         self._features = np.transpose(np.array(self._sess.run(self._features_tensor, {self.state_ph: self.state})))
 
@@ -396,6 +437,15 @@ class DQNAgent(object):
             self._store_transition(self._last_observation, self.action, reward, False, self._features, self._state,
                                    self._next_state, self._next_action, self._next_reward)
             self._train_step()
+        '''
+        if self._state_count >= 3:
+            # assert (self._state == self._replay.memory.get_observation_stack(self._state_build_cnt)).all(), 'We fucked up'
+            self._state = self._replay.memory.get_observation_stack(self._state_build_cnt)
+            self._state_build_cnt += 1
+        else:
+            self._state_count += 1
+            self._state = self.state[0, :, :, :]
+'''
 
         self.action = self._select_action()
         return self.action
@@ -460,7 +510,36 @@ class DQNAgent(object):
                 self._replay_features = np.transpose(np.array(self._sess.run(self._replay_net_outputs.features,
                                                                              {self._replay.states: replay_states})))
 
+                replay_states_test = self._sess.run(self._replay.states)
+                state_cmp = replay_states_test == replay_states
+                # print(state_cmp)
+                print('\n')
+                print(state_cmp.all())
+                print('\n')
+
+                replay_indices_test = self._sess.run(self._replay.indices)
+                index_cmp = replay_indices_test == replay_indices
+                print(replay_indices)
+                print('\n')
+                print(replay_indices_test)
+                print('\n')
+                print(index_cmp)
+                assert False
+
+                assert state_cmp.all()
+
+                features_test = np.transpose(np.array(self._replay_net_outputs.features.eval(session=self._sess)))
+                features_test2 = np.transpose(np.array(self._sess.run(self._replay_net_outputs.features)))
+                assert (features_test == features_test2).all(), "error test1-test2"
+                assert (features_test2 == self._replay_features).all(), "error test2-self"
+                print('\n')
+                print(type(features_test))
+                print('\n')
+                print(type(self._replay_features))
+                assert (self._replay_features == features_test).all(), "error test1-self"
+
                 for j, index in zip(range(self._replay.batch_size), replay_indices):
+                    # TODO(B): regarding the reshaping, check if np.mat(features) beforehand if more efficient.
                     self._replay.memory.update_features(index, np.reshape(self._replay_features[:, j], (512, 1)))
 
                 if (self.summary_writer is not None and
@@ -489,6 +568,9 @@ class DQNAgent(object):
         # Swap out the oldest frame with the current frame.
         self.state = np.roll(self.state, -1, axis=-1)
         self.state[0, ..., -1] = self._observation
+        # self._state = self.state[0, :, :, :]
+        self._state_dummy = np.roll(self._state, -1, axis=-1)
+        self._state_dummy[..., -1] = self._observation
 
     def _store_transition(self, last_observation, action, reward, is_terminal, features, state, next_state, next_action,
                           next_reward):
@@ -508,9 +590,18 @@ class DQNAgent(object):
           is_terminal: bool, indicating if the current state is a terminal state.
         """
 
+        # if self._state_count >= 4:
+        # if True:
         self._replay.add(last_observation, action, reward, is_terminal, features, state, next_state, next_action,
                          next_reward)
-
+        # if self._state_count >= 100:
+        #    print(np.shape(self._features))
+        #    print(self._replay.memory._store['observation'][4])
+        #    raise ValueError('Printed storage')
+        # else:
+        #    self._state_count += 1
+        # else:
+        #    self._state_count += 1
 
     def _reset_state(self):
         """Resets the agent state by filling it with zeros."""
