@@ -217,7 +217,6 @@ class OutOfGraphReplayBuffer(object):
         self._wrong_next_states = 0
         self._score_cnt = 0
         self._min_entry_buffer = np.zeros((1, 100))
-        self.score_buffer_test = []
 
     def _create_storage(self):
         """Creates the numpy arrays used to store transitions.
