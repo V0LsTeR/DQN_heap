@@ -200,7 +200,13 @@ class OutOfGraphReplayBuffer(object):
         self._features_size = 50
         self._feature_matrix_inv = np.zeros((self._features_size, self._features_size, self._num_actions))
         for j in range(self._num_actions):
-            self._feature_matrix_inv[:, :, j] = 0.0001 * np.identity(self._features_size)
+            self._feature_matrix_inv[:, :, j] = np.mat(1 * np.identity(self._features_size))
+
+        self._feature_matrix_manual = np.zeros((self._features_size, self._features_size, self._num_actions))
+        self._feature_matrix_manual_inv = np.zeros((self._features_size, self._features_size, self._num_actions))
+        for j in range(self._num_actions):
+            self._feature_matrix_manual[:, :, j] = np.mat(1 * np.identity(self._features_size))
+            self._feature_matrix_manual_inv[:, :, j] = np.linalg.inv(self._feature_matrix_manual[:, :, j])
 
         self._score_heap = []
         self._prev_cursor = 0
@@ -217,6 +223,7 @@ class OutOfGraphReplayBuffer(object):
         self._wrong_next_states = 0
         self._score_cnt = 0
         self._min_entry_buffer = np.zeros((1, 100))
+        self.score_buffer_test = []
 
     def _create_storage(self):
         """Creates the numpy arrays used to store transitions.
@@ -317,16 +324,52 @@ class OutOfGraphReplayBuffer(object):
             for arg_name, arg in zip(arg_names, args):
                 if arg_name == 'features':
                     features = np.mat(arg)
+                    #features = arg
+                    #print(type(features))
+                    #assert False
                 if arg_name == 'action':
                     action = arg
 
             if self.is_full():
-                _, index = heappop(self._score_heap)
+                # TODO(B): add an "is_valid_transition" condition on the index, and in that function add the requirement
+                #  that score of said transition != 0 (make sure you don't fuck anything up though, and be careful not
+                #  to "pop" the element unless it's a valid transition (think about how will that affect the heap
+                #  structure, maybe it's actually better to pop until all that remains is valid, idk)
+                popped_element = heappop(self._score_heap)
+                index = popped_element.buffer_index
+                # if popped_element.score == 0:
+                #     print('ZERO TRANSITION')
+                # self.score_buffer_test.append(popped_element.score)
+                # if self.add_count == 500100:
+                #     print(self.score_buffer_test)
+                #     assert False
+                #assert popped_element.score == self._min_entry_buffer[self.dummy_cnt], \
+                #    'you done fucked up. min_entry_core = {}, popped_score = {}, failed at: cnt = {}'.\
+                #    format(self._min_entry_buffer[self.dummy_cnt], popped_element.score, self.dummy_cnt)
+                # self.dummy_cnt += 1
+                # assert popped_element.score != 0
                 low_features = np.mat(self._store['features'][index])
                 score = self.compute_score(low_features, features, action)
                 cursor = index
             else:
                 score = self.compute_score(features, features, action)
+                '''
+                test_score = cp.copy(score)
+                if self.add_count < 100:
+                    self._min_entry_buffer[self.add_count] = test_score
+                else:
+                    for i in range(100):
+                        if self._min_entry_buffer[i] > test_score:
+                            self._min_entry_buffer[i] = test_score
+                    print(self._min_entry_buffer)
+
+                buffer = np.zeros(20)
+                for _ in range(20):
+                    test_score = random.randint(0, 50)
+                    for i in range(20):
+                        if buffer[i] > test_score:
+                            buffer[i]
+'''
 
             new_node = HeapElement(cp.copy(score), cursor)
             heappush(self._score_heap, new_node)
@@ -355,22 +398,38 @@ class OutOfGraphReplayBuffer(object):
 
         self._prev_cursor = cursor
 
-    def update_features(self, index, updated_features):
+    def update_features(self, indices, updated_features_batch):
         """Replaces the old features of the sampled transitions with
-        the updated features, updates the score, and heapifies.
+        the updated features, updates the scores, and heapifies.
 
         Args:
-            index: the index in the buffer of the transition whose
+            indices: the buffer indices of the transitions whose
                     features are to be replaced.
-            updated_features: the newly updated features of said transition.
+            updated_features_batch: the newly updated features of
+                    said transitions.
         """
-        discarded_features = self._store['features'][index]
-        self._store['features'][index] = updated_features
-        action = self._store['action'][index]
 
-        updated_score = self.compute_score(discarded_features, updated_features, action)
-        # TODO(B): Heapify! (figure out the O(log n) method and not the built-in O(n) method.)
-        self._heap_ref[index].score = updated_score
+        for index, updated_features in zip(indices, updated_features_batch):
+            discarded_features = self._store['features'][index]
+            updated_features = np.transpose(updated_features)
+            self._store['features'][index] = updated_features
+            action = self._store['action'][index]
+
+            updated_score = self.compute_score(discarded_features, updated_features, action)
+            # TODO(B): Heapify! (figure out the O(log n) method and not the built-in O(n) method.)
+            self._heap_ref[index].score = updated_score
+
+    def tf_update_features(self, indices, updated_features_batch):
+        """Defines a tf operation which implements the function update_features.
+
+        Args:
+            indices: tf.Tensor with dtype int32 and shape (self.batch_size,).
+            updated_features_batch: tf.Tensor with dtype float and shape (self.batch_size, self._features_size).
+
+        Returns:
+            A tf op updating the features and the scores of the given indices.
+        """
+        return tf.py_func(self.update_features, [indices, updated_features_batch], [])
 
     def compute_score(self, old_features, new_features, action):
         """Updates the matrix inv(A) using Sherman-Morrison's formula
@@ -388,22 +447,18 @@ class OutOfGraphReplayBuffer(object):
         Returns:
             score: the score of the new_features.
         """
-        # score = self.add_count
 
         if self.is_full():
-            vA_old = np.dot(np.transpose(old_features), self._feature_matrix_inv[:, :, action])
-            SM_denominator_old = math.sqrt(1 - np.dot(vA_old, old_features))
-            vA_old_normalized = vA_old / SM_denominator_old
-            self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] + (
-                    np.outer(np.transpose(vA_old_normalized), vA_old_normalized))
+            self._feature_matrix_manual[:, :, action] -= np.outer(old_features, old_features)
 
-        vA_new = np.dot(np.transpose(new_features), self._feature_matrix_inv[:, :, action])
-        SM_denominator_new = math.sqrt(1 + np.dot(vA_new, new_features))
-        vA_new_normalized = vA_new / SM_denominator_new
-        self._feature_matrix_inv[:, :, action] = self._feature_matrix_inv[:, :, action] - (
-                np.outer(np.transpose(vA_new_normalized), vA_new_normalized))
+        self._feature_matrix_manual[:, :, action] += np.outer(new_features, new_features)
 
-        score = np.dot(vA_new, new_features)
+        if self.add_count % 100 == 0:
+            self._feature_matrix_manual_inv[:, :, action] = np.linalg.inv(self._feature_matrix_manual[:, :, action])
+
+        score = np.dot(np.transpose(new_features), np.dot(self._feature_matrix_manual_inv[:, :, action], new_features))
+
+        assert score >= 0, 'Failing score = {}'.format(score)
         return score
 
     def _check_add_types(self, *args):
