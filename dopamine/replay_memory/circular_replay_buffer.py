@@ -810,6 +810,7 @@ class OutOfGraphReplayBuffer(object):
                                               'Missing file: {}'.format(filename))
         # If we've reached this point then we have verified that all expected files
         # are available.
+        
         for attr in save_elements:
             filename = self._generate_filename(checkpoint_dir, attr, suffix)
             with tf.gfile.Open(filename, 'rb') as f:
