@@ -301,13 +301,6 @@ class OutOfGraphReplayBuffer(object):
                 # Child classes can rely on the padding transitions being filled with
                 # zeros. This is useful when there is a priority argument.
                 self._add_zero_transition()
-                # TODO(B): Should this be removed all together (once score is added, we don't want to always pop the
-                #  zero transition's score, which is always zero, from the heap)? This is the case only if we want to
-                #  store the score in the buffer as well as in the heap. This is fucked up since when adding a zero
-                #  transition we also add a zero score by calculation, so we need to fix this somehow: maybe get rid of
-                #  it all together... Or make sure that a zero transition holds None in the pointer and doesn't add an
-                #  entry to the heap by using a flag or idk (maybe try this one first before fucking it up too much).
-                # TODO(B): understand how this fits together with the heap.
         self._add(observation, action, reward, terminal, *args)
 
     def _add(self, *args):
@@ -324,52 +317,17 @@ class OutOfGraphReplayBuffer(object):
             for arg_name, arg in zip(arg_names, args):
                 if arg_name == 'features':
                     features = np.mat(arg)
-                    #features = arg
-                    #print(type(features))
-                    #assert False
                 if arg_name == 'action':
                     action = arg
 
             if self.is_full():
-                # TODO(B): add an "is_valid_transition" condition on the index, and in that function add the requirement
-                #  that score of said transition != 0 (make sure you don't fuck anything up though, and be careful not
-                #  to "pop" the element unless it's a valid transition (think about how will that affect the heap
-                #  structure, maybe it's actually better to pop until all that remains is valid, idk)
                 popped_element = heappop(self._score_heap)
                 index = popped_element.buffer_index
-                # if popped_element.score == 0:
-                #     print('ZERO TRANSITION')
-                # self.score_buffer_test.append(popped_element.score)
-                # if self.add_count == 500100:
-                #     print(self.score_buffer_test)
-                #     assert False
-                #assert popped_element.score == self._min_entry_buffer[self.dummy_cnt], \
-                #    'you done fucked up. min_entry_core = {}, popped_score = {}, failed at: cnt = {}'.\
-                #    format(self._min_entry_buffer[self.dummy_cnt], popped_element.score, self.dummy_cnt)
-                # self.dummy_cnt += 1
-                # assert popped_element.score != 0
                 low_features = np.mat(self._store['features'][index])
                 score = self.compute_score(low_features, features, action)
                 cursor = index
             else:
                 score = self.compute_score(features, features, action)
-                '''
-                test_score = cp.copy(score)
-                if self.add_count < 100:
-                    self._min_entry_buffer[self.add_count] = test_score
-                else:
-                    for i in range(100):
-                        if self._min_entry_buffer[i] > test_score:
-                            self._min_entry_buffer[i] = test_score
-                    print(self._min_entry_buffer)
-
-                buffer = np.zeros(20)
-                for _ in range(20):
-                    test_score = random.randint(0, 50)
-                    for i in range(20):
-                        if buffer[i] > test_score:
-                            buffer[i]
-'''
 
             new_node = HeapElement(cp.copy(score), cursor)
             heappush(self._score_heap, new_node)
@@ -386,7 +344,10 @@ class OutOfGraphReplayBuffer(object):
                     assert (self._store[arg_name][cursor] ==
                             self._store['next_' + arg_name][self._prev_cursor]
                             ).all(), 'current {} is {} while prev next_{} is {}'.format(arg_name,
-                            self._store[arg_name][cursor], arg_name, self._store['next_' + arg_name][self._prev_cursor])
+                                                                                        self._store[arg_name][cursor],
+                                                                                        arg_name,
+                                                                                        self._store['next_' + arg_name][
+                                                                                            self._prev_cursor])
             else:
                 self._store[arg_name][cursor] = arg
 
@@ -447,6 +408,9 @@ class OutOfGraphReplayBuffer(object):
         Returns:
             score: the score of the new_features.
         """
+        # TODO(B): Add assertions to make sure the shapes of vA_old/new, matrix, score are correct. Maybe include
+        #  printing to files to make sure the values are fine.
+        # score = self.add_count
 
         if self.is_full():
             self._feature_matrix_manual[:, :, action] -= np.outer(old_features, old_features)
@@ -454,11 +418,12 @@ class OutOfGraphReplayBuffer(object):
         self._feature_matrix_manual[:, :, action] += np.outer(new_features, new_features)
 
         if self.add_count % 100 == 0:
-            self._feature_matrix_manual_inv[:, :, action] = np.linalg.inv(self._feature_matrix_manual[:, :, action])
+            for action in range(self._num_actions):
+                self._feature_matrix_manual_inv[:, :, action] = np.linalg.inv(self._feature_matrix_manual[:, :, action])
 
         score = np.dot(np.transpose(new_features), np.dot(self._feature_matrix_manual_inv[:, :, action], new_features))
 
-        assert score >= 0, 'Failing score = {}'.format(score)
+        assert score >= 0, 'failing score = {}'.format(score)
         return score
 
     def _check_add_types(self, *args):
